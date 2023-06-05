@@ -150,17 +150,37 @@ def adp_filt_h5(currdf: object, pose):
     currdf_filt = currdf_filt.astype(np.float)
     return currdf_filt, perc_rect
 
+def zero_initialization():
+    return np.hstack([[0, 0]])
 
-def adp_filt_sleap_h5(currdf: object, pose):
+def nan_initialization():
+    return np.hstack([[np.nan, np.nan]])
+
+INIT_METHODS={"zero": zero_initialization, "nan": nan_initialization}
+
+
+def adp_filt_sleap_h5(currdf: object, pose, method="nan", pb=True):
     datax = currdf['tracks'][0][0][pose]
     datay = currdf['tracks'][0][1][pose]
     currdf_filt = np.zeros((datax.shape[1], (datax.shape[0]) * 2))
     perc_rect = []
     for i in range(len(pose)):
-        perc_rect.append(np.argwhere(np.isnan(datax[i]) == True).shape[0] / datax.shape[1])
-    for x in tqdm(range(datax.shape[0])):
-        first_not_nan = np.where(np.isnan(datax[x, :]) == False)[0][0]
+        perc_missing=np.argwhere(np.isnan(datax[i]) == True).shape[0] / datax.shape[1]
+        perc_rect.append(perc_missing)
+
+    if pb:
+        iterator=tqdm(range(datax.shape[0]))
+    else:
+        iterator=range(datax.shape[0])
+
+    for x in iterator:
+        if perc_rect[x] == 1.0:
+            first_not_nan = 0
+        else:
+            first_not_nan = np.where(np.isnan(datax[x, :]) == False)[0][0]
+        
         currdf_filt[0, (2 * x):(2 * x + 2)] = np.hstack([datax[x, first_not_nan], datay[x, first_not_nan]])
+
         for i in range(1, datax.shape[1]):
             if np.isnan(datax[x][i]):
                 currdf_filt[i, (2 * x):(2 * x + 2)] = currdf_filt[i - 1, (2 * x):(2 * x + 2)]

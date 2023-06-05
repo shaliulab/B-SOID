@@ -25,7 +25,7 @@ if st.sidebar.checkbox('Load previous iteration', False, key='l'):
     working_dir, prefix = query_workspace()
 if st.sidebar.checkbox('Load data and preprocess', False, key='d'):
     try:
-        [_, _, _, _, _, raw_input_data, processed_input_data, sub_threshold] = load_data(working_dir, prefix)
+        [_, _, _, _, _, raw_input_data, processed_input_data, sub_threshold] = load_data(working_dir, [prefix])
         st.markdown('**_CHECK POINT_**: Processed a total of **{}** data files, '
                     'and compiled into a **{}** data list. Move on to '
                     '__Extract and embed features__.'.format(len(raw_input_data), processed_input_data.shape))

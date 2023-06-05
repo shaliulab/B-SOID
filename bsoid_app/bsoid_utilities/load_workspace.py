@@ -1,13 +1,17 @@
 import streamlit as st
 import os
 import joblib
-
+from .utils import (
+    load_data_,
+    load_feats_,
+    load_embeddings_,
+    load_clusters_,
+    load_classifier_,
+)
 
 @st.cache
 def load_data(path, name):
-    with open(os.path.join(path, str.join('', (name, '_data.sav'))), 'rb') as fr:
-        data = joblib.load(fr)
-    return [i for i in data]
+    return load_data_(path, name)
 
 
 def query_workspace():
@@ -35,31 +39,21 @@ def query_workspace():
 
 @st.cache
 def load_feats(path, name):
-    with open(os.path.join(path, str.join('', (name, '_feats.sav'))), 'rb') as fr:
-        data = joblib.load(fr)
-    return [i for i in data]
+    return load_feats_(path, name)
 
 
 @st.cache
 def load_embeddings(path, name):
-    with open(os.path.join(path, str.join('', (name, '_embeddings.sav'))), 'rb') as fr:
-        data = joblib.load(fr)
-    return [i for i in data]
-
+    return load_embeddings_(path, name)
 
 @st.cache
 def load_clusters(path, name):
-    with open(os.path.join(path, str.join('', (name, '_clusters.sav'))), 'rb') as fr:
-        data = joblib.load(fr)
-    return [i for i in data]
+    return load_clusters_(path, name)
 
 
 @st.cache(allow_output_mutation=True)
 def load_classifier(path, name):
-    with open(os.path.join(path, str.join('', (name, '_randomforest.sav'))), 'rb') as fr:
-        data = joblib.load(fr)
-    return [i for i in data]
-
+    return load_classifier_(path, name)
 
 @st.cache
 def load_predictions(path, name):
