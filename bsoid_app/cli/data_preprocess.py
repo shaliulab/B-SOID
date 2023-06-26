@@ -18,7 +18,10 @@ DEFAULT_FRAMERATE=150
 
 class preprocess:
 
-    def __init__(self, prefix, root_path=DEFAULT_BSOID_DATA, software=BSOID_POSE, ftype="h5", framerate=DEFAULT_FRAMERATE, no_subfolders=None, no_files=None):
+    def __init__(
+            self, prefix, root_path=DEFAULT_BSOID_DATA, software=BSOID_POSE, ftype="h5",
+            framerate=DEFAULT_FRAMERATE, pose_chosen=None, subfolders=None, no_files=None
+        ):
 
         self.pose_chosen = []
         self.input_filenames = []
@@ -28,8 +31,7 @@ class preprocess:
         self.software = software
         self.ftype = ftype
         self.no_files=no_files
-        # logging.info('Currently only supporting {} type files'.format(self.ftype))
-        # loggin.info('Currently only supporting {} type files'.format(self.ftype))
+        self.pose_chosen=pose_chosen
         
         self.root_path = root_path
         try:
@@ -37,18 +39,8 @@ class preprocess:
         except FileNotFoundError:
             raise Exception('No such directory')
 
-        self.data_directories = []
-
-        logging.info('Your will be training on *{}* data file containing sub-directories.'.format(no_subfolders))
-        dirs=(sorted(os.listdir(self.root_path)))
-        if no_subfolders is None:
-            no_subfolders=len(dirs)
-
-        file_counter=0
-        for i in range(no_subfolders):
-            d = dirs[i]
-            if not d in self.data_directories:
-                self.data_directories.append(d)
+        logging.info('Your will be training on *{}* data file containing sub-directories.'.format(subfolders))
+        self.data_directories=subfolders
 
 
         logging.info('You have selected **{}** as your _sub-directory(ies)_.'.format(self.data_directories))
@@ -64,7 +56,7 @@ class preprocess:
             logging.error('Cannot access working directory, was there a typo or did you forget to create one?')
         self.prefix=prefix
 
-    def compile_data(self, n_jobs=1):
+    def compile_data(self, frame_numbers=None, n_jobs=1):
         logging.info('Identify pose to include in clustering.')
         if self.software == 'DeepLabCut' and self.ftype == 'csv':
             raw_input_data, sub_threshold, processed_input_data, input_filenames = preprocess_dlc_csv()
@@ -73,11 +65,14 @@ class preprocess:
 
         elif self.software == 'SLEAP' and self.ftype == 'h5':
             logging.info("Preprocessing sleap h5 files")
+
             raw_input_data, sub_threshold, processed_input_data, input_filenames, self.pose_chosen = preprocess_sleap_h5(
                 self.root_path,
                 self.data_directories,
                 n_jobs=n_jobs,
-                no_files=self.no_files
+                no_files=self.no_files,
+                frame_numbers=frame_numbers,
+                pose_chosen=self.pose_chosen
             )
 
         elif self.software == 'OpenPose' and self.ftype == 'json':
@@ -98,6 +93,27 @@ class preprocess:
                 np.array(processed_input_data).shape
                 )
             )
+        
+        indexed_data = [
+            (
+                os.path.basename(input_filenames[i]),
+                input_filenames[i],
+                raw_input_data[i],
+                sub_threshold[i],
+                processed_input_data[i]
+            )
+            for i in range(len(processed_input_data))
+        ]
+        # maybe not needed, but still good to have,
+        # to ensure that the chunks are added in the right order
+        # i.e. 2 after 1 and so on
+        indexed_data=sorted(indexed_data, key=lambda x: x[0])
+
+        input_filenames=[e[1] for e in indexed_data]
+        raw_input_data=[e[2] for e in indexed_data]
+        sub_threshold=[e[3] for e in indexed_data]
+        processed_input_data=[e[4] for e in indexed_data]
+
         return raw_input_data, sub_threshold, processed_input_data, input_filenames
 
 

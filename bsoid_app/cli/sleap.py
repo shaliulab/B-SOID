@@ -11,10 +11,12 @@ from bsoid_app.bsoid_utilities.likelihoodprocessing import (
 )
 
 
-def preprocess_sleap_h5(root_path, data_directories, **kwargs):
-    data_files = glob.glob(root_path + data_directories[0] + '/*.h5')
+def preprocess_sleap_h5(root_path, data_directories, pose_chosen=None, **kwargs):
+    
+    data_files = glob.glob(os.path.join(root_path, data_directories[0], '*.h5'))
     file0_df = h5py.File(data_files[0], 'r')
-    pose_chosen = list(range(len(file0_df['node_names'][:])))
+    if pose_chosen is None:
+        pose_chosen = list(range(len(file0_df['node_names'][:])))
 
     raw_input_data, sub_threshold, processed_input_data, input_filenames = preprocess_sleap_all(
         root_path=root_path,

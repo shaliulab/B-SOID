@@ -3,12 +3,16 @@ import base64
 
 import ffmpeg
 import h5py
+import math
 
-from bsoid_app.bsoid_utilities.bsoid_classification import *
+from bsoid_app.bsoid_utilities.bsoid_classification import bsoid_predict
+from bsoid_app.cli.extract_features import bsoid_extract
 from bsoid_app.bsoid_utilities.likelihoodprocessing import *
 from bsoid_app.bsoid_utilities.load_json import *
 from bsoid_app.bsoid_utilities.videoprocessing import *
-
+from bsoid_app.bsoid_utilities.utils import (
+    window_from_framerate,
+)
 
 def selected_file(d_file):
     return d_file
@@ -153,7 +157,7 @@ class creator:
 
             for dataset in tqdm(self.file_j_processed):
                 labels._fs.append(
-                    self.inference(self.clf, dataset, self.framerate)
+                    self.inference(self.clf, dataset, framerate=self.framerate)
                 )
     
             logging.info('Frameshifted arrangement of labels... ')
@@ -171,7 +175,9 @@ class creator:
 
     @staticmethod
     def inference(model, dataset, framerate):
-        feats_new = bsoid_extract([dataset], self.framerate)
+        window = window_from_framerate(framerate)
+        feats_new, _ = bsoid_extract(dataset=dataset, window=window)
+
         labels = bsoid_predict(feats_new, model)
         for m in range(0, len(labels)):
             labels[m] = labels[m][::-1]
@@ -212,7 +218,11 @@ class creator:
     def main(self):
         self.setup()
         self.create_videos()
-        if st.checkbox("Show a collage of example group? "
-                       "This could take some time for gifs conversions.".format(self.shortvid_dir), False, key='vs'):
+        if st.checkbox(
+            "Show a collage of example group? "
+            "This could take some time for gifs conversions.".format(
+                self.shortvid_dir
+            ),
+        False, key='vs'):
             self.show_snippets()
 

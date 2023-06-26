@@ -27,20 +27,24 @@ class protocol:
         self.validate_score = []
         self.predictions = []
 
-    def randomforest(self):
+    def randomforest(self, n_jobs=1):
         try:
             x = self.sampled_features[self.assignments >= 0, :]
             y = self.assignments[self.assignments >= 0]
             x_train, self.x_test, y_train, self.y_test = train_test_split(x, y.T, test_size=self.part, random_state=42)
             logging.info('Training random forest classifier on randomly partitioned')
 
-            self.validate_clf = RandomForestClassifier(random_state=42)
+            self.validate_clf = RandomForestClassifier(random_state=42, n_jobs=n_jobs)
             self.validate_clf.fit(x_train, y_train)
-            self.clf = RandomForestClassifier(random_state=42)
+            self.clf = RandomForestClassifier(random_state=42, n_jobs=n_jobs)
             self.clf.fit(x, y.T)
             self.predictions = self.clf.predict(self.features.T)
-            logging.info('Done training random forest classifier mapping '
-                    '**{}** features to **{}** assignments.'.format(self.features.T.shape, self.predictions.shape))
+            logging.info(
+                'Done training random forest classifier mapping '
+                '**{}** features to **{}** assignments.'.format(
+                    self.features.T.shape, self.predictions.shape
+                )
+            )
             self.validate_score = cross_val_score(self.validate_clf, self.x_test, self.y_test, cv=self.it, n_jobs=-1)
             with open(os.path.join(self.working_dir, str.join('', (self.prefix, '_randomforest.sav'))), 'wb') as f:
                 joblib.dump([self.x_test, self.y_test, self.validate_clf, self.clf,

@@ -4,25 +4,140 @@ from tqdm import tqdm
 import itertools
 import joblib
 import os.path
-import math
 import scipy.ndimage
 
-import umap
-from psutil import virtual_memory
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from bsoid_app.bsoid_utilities.utils import (
     load_embeddings_,
-    load_feats_
+    load_feats_,
+    window_from_framerate,
 )
-from bsoid_app.bsoid_utilities.likelihoodprocessing import boxcar_center
-from bsoid_app.config import UMAP_PARAMS
+
+from .umap_implementations import (
+    cpu_umap,
+    cuml_umap,
+)
+
+def bsoid_extract_xy(dxy_r, weights):
+
+    dxy_eu=np.linalg.norm(dxy_r, axis=2)
+    dxy_feat = scipy.ndimage.convolve1d(dxy_eu, weights, axis=0, mode="constant", cval=0).T
+    return dxy_feat
 
 
+def bsoid_extract_angular(dxy_r, weights):
+
+    b_3d=np.concatenate([
+        dxy_r[1:],
+        dxy_r[1:,:,0][:,:,np.newaxis]*0
+    ],axis=2)
+    
+    a_3d=np.concatenate([
+        dxy_r[:-1],
+        dxy_r[:-1:,:,0][:,:,np.newaxis]*0
+    ],axis=2)
+
+    cross_product=np.cross(b_3d, a_3d)
+    
+    ang_rad=np.arctan2(
+        np.linalg.norm(cross_product, axis=2),
+        np.einsum('ijk,ijk->ij', dxy_r[:-1], dxy_r[1:])
+    )
+
+    to_degs = np.dot(
+        np.sign(cross_product[:, :, 2]), 180
+    ) / np.pi
+
+    ang=ang_rad*to_degs
+    ang_feat = scipy.ndimage.convolve1d(ang, weights, axis=0, mode="constant", cval=0).T
+
+
+    return ang_feat
+    
+def bsoid_extract(dataset, window, stride, my_bar=None):
+    """
+    Compute spatio-temporal features from the pose estimate
+
+    Args:
+
+        dataset: np.array of shape timepoints x (body_parts x 2)
+        window: size of window in the timeseries which will be used to average the raw estimates
+        (i.e. all timepoints in the same window get the same estimate, which will be their mean)
+        Afterwards, the same window size will be used to aggregate features (window_size x n_features -> 1 x n_features).
+            Distance features will be averaged over each window 
+            Angular features (within same frame) will be summed over each window
+            Displacement features (over time) will be summed over each window
+    
+    """
+    # Create a window of weights - in the case of a simple moving average, the weights are all 1
+    weights = np.ones(window) / window
+
+    time_feats=np.stack([dataset[:, i:i+2] for i in range(0, dataset.shape[1], 2)], axis=2)
+    space_feats=np.stack([[
+        dataset[:, j:j+2],
+        dataset[:, i:i+2]
+    ] for i, j in itertools.combinations(range(0, dataset.shape[1], 2), 2) ], axis=2)
+
+    disp_r = np.linalg.norm(np.diff(time_feats, axis=0), axis=1)
+
+    # feats x timepoints -1
+    disp_feat = scipy.ndimage.convolve1d(disp_r, weights, axis=0, mode="constant", cval=0).T
+
+    dxy_r=np.diff(space_feats, axis=0)[0]
+    
+    # feats x timepoints -1
+    ang_feat = bsoid_extract_angular(dxy_r, weights)
+    
+    # feats x timepoints   
+    dxy_feat=bsoid_extract_xy(dxy_r, weights)
+
+
+    features=np.vstack((dxy_feat[:, 1:], ang_feat, disp_feat))
+    if my_bar is not None:
+        my_bar.update(1)
+        
+    start_pos = dxy_feat.shape[0]
+
+    padding_size=stride - (features.shape[1] % stride)
+    padding=[
+        features[:,-1].reshape((-1, 1))
+        for _ in range(padding_size)
+    ]
+    
+    padding=np.hstack(padding)
+    feats_windows=np.concatenate(
+        [features, padding],
+        axis=1
+    ).astype(np.float64)
+    
+    feats_windows=feats_windows.reshape((feats_windows.shape[0], stride, -1), order="A")
+
+    feats_windows[:start_pos, -padding_size:,-1]=feats_windows[
+        :start_pos,
+        (feats_windows.shape[1]-stride):(feats_windows.shape[1]-padding_size),
+        -1
+    ].mean(axis=1).reshape((-1, 1))
+    feats_windows[start_pos:, -padding_size:, -1]=0
+
+    
+    f_integrated=np.concatenate([
+        feats_windows[:start_pos].mean(axis=1),
+        feats_windows[start_pos:].sum(axis=1)
+    ])[:,:-1]
+    
+    scaler = StandardScaler()
+    scaler.fit(f_integrated.T)
+    scaled_features = scaler.transform(f_integrated.T).T
+
+    # dimensions x timepoints!
+
+    return f_integrated, scaled_features
+    
 class extract:
 
-    def __init__(self, working_dir, prefix, processed_input_data, framerate, fraction=1.0, stride=None):
+    def __init__(self, working_dir, prefix, processed_input_data, framerate, fraction=1.0, use_gpu=True):
         self.working_dir = working_dir
         self.prefix = prefix
         self.processed_input_data = processed_input_data
@@ -33,13 +148,11 @@ class extract:
         self.sampled_features = []
         self.sampled_embeddings = []
         self.fraction=fraction
-        self.stride=stride
+        self.stride=self.framerate / 10
+        self.use_gpu=use_gpu
 
 
     def subsample(self, fraction):
-        if self.stride is None:
-            # downsample to 1th of framerate
-            self.stride=self.framerate / 10
 
         data_size = 0
         for n in range(len(self.processed_input_data)):
@@ -55,133 +168,62 @@ class extract:
         else:
             self.train_size = int(data_size * fraction)
 
-    def compute_features(self, n_jobs=1):
+    def compute_features(self, n_jobs=1, **kwargs):
         logging.info('Extracting...')
-
         try:
             [self.features, self.scaled_features] = load_feats_(self.working_dir, self.prefix)
         except FileNotFoundError:
-            self.compute_features_(n_jobs=n_jobs)
+            [self.features, self.scaled_features] = self.compute_features_parallel(datasets=self.processed_input_data, n_jobs=n_jobs)
 
         self.save(self.features, self.scaled_features)
-        self.learn_embeddings()
+        self.learn_embeddings(**kwargs)
 
 
-    @staticmethod
-    def compute_distances_single_data(dataset, window, my_bar=None):
-        time_feats=np.stack([dataset[:, i:i+2] for i in range(0, dataset.shape[1], 2)], axis=2)
-        space_feats=np.stack([[
-            dataset[:, j:j+2],
-            dataset[:, i:i+2]
-        ] for i, j in itertools.combinations(range(0, dataset.shape[1], 2), 2) ], axis=2)
-
-        disp_r = np.linalg.norm(np.diff(time_feats, axis=0), axis=1)
-        dxy_r=np.diff(space_feats, axis=0)[0]
-
-        # Create a window of weights - in the case of a simple moving average, the weights are all 1
-        weights = np.ones(window) / window
-        # Convolve your data with the window of weights
-        disp_feat = scipy.ndimage.convolve1d(disp_r, weights, axis=0, mode="constant", cval=0).T
-
-        dxy_eu=np.linalg.norm(dxy_r, axis=2)
-        dxy_feat = scipy.ndimage.convolve1d(dxy_eu, weights, axis=0, mode="constant", cval=0).T
-
-        b_3d=np.concatenate([
-            dxy_r[1:],
-            dxy_r[1:,:,0][:,:,np.newaxis]*0
-        ],axis=2)
-        a_3d=np.concatenate([
-            dxy_r[:-1],
-            dxy_r[:-1:,:,0][:,:,np.newaxis]*0
-        ],axis=2)
-        cross_product=np.cross(b_3d, a_3d)
-        ang_rad=np.arctan2(
-            np.linalg.norm(cross_product, axis=2),
-            np.einsum('ijk,ijk->ij', dxy_r[:-1], dxy_r[1:])
-        )
-
-        to_degs = np.dot(
-            np.sign(cross_product[:, :, 2]), 180
-        ) / np.pi
-
-        ang=ang_rad*to_degs
-        ang_feat = scipy.ndimage.convolve1d(ang, weights, axis=0, mode="constant", cval=0).T
-        
-        features=np.vstack((dxy_feat[:, 1:], ang_feat, disp_feat))
-        if my_bar is not None:
-            my_bar.update(1)
-
-        return features, dxy_feat.shape[0]
-
-    def compute_distances(self, datasets, n_jobs, **kwargs):
-        window = np.int(np.round(0.05 / (1 / self.framerate)) * 2 - 1)
+    def compute_features_parallel(self, datasets, n_jobs, **kwargs):
+        window=window_from_framerate(self.framerate)
+        stride=int(self.framerate/10)
 
         Output = joblib.Parallel(n_jobs=n_jobs)(
             joblib.delayed(
-                self.compute_distances_single_data
+                bsoid_extract
             )(
-                datasets[n], window, **kwargs
+                dataset=datasets[n], window=window, stride=stride, **kwargs
             )
-            for n, _ in enumerate(datasets) 
+            for n, _ in enumerate(datasets)
         )
-    
+
         features=[]
-        start_pos=None
-        for features_single_data, start_pos in  Output:
-            features.append(features_single_data)
-        
-        return features, start_pos
+        scaled_features=[]
 
+        for f, s in  Output:
+            features.append(f)
+            scaled_features.append(s)
 
-    def compute_features_(self, n_jobs):
-        if n_jobs==1:
-            my_bar = tqdm(total=len(self.processed_input_data))
-        else:
-            my_bar=None
-        features, start_pos=self.compute_distances(datasets=self.processed_input_data, n_jobs=n_jobs, my_bar=my_bar)
-
-
-        for m, _ in enumerate(features):
-            feats_windows=np.concatenate([
-                features[m], features[m][:,-(start_pos-1):].mean(axis=1).reshape((-1, 1))
-            ], axis=1).astype(np.int32)
-            feats_windows=feats_windows.reshape((feats_windows.shape[0], self.stride, -1), order="A")
-
-            f_integrated=np.concatenate([
-                feats_windows[:start_pos].mean(axis=1),
-                feats_windows[start_pos:].sum(axis=1)
-            ])[:,:-1]
-            
-            if m > 0:
-                self.features = np.concatenate((self.features, f_integrated), axis=1)
-                scaler = StandardScaler()
-                scaler.fit(f_integrated.T)
-                scaled_f_integrated = scaler.transform(f_integrated.T).T
-                self.scaled_features = np.concatenate((self.scaled_features, scaled_f_integrated), axis=1)
-            else:
-                self.features = f_integrated
-                scaler = StandardScaler()
-                scaler.fit(f_integrated.T)
-                scaled_f_integrated = scaler.transform(f_integrated.T).T
-                self.scaled_features = scaled_f_integrated
-        
-        self.features = np.array(self.features)
-        self.scaled_features = np.array(self.scaled_features)
-        
+        features=np.hstack(features)
+        scaled_features=np.hstack(scaled_features)
+        return features, scaled_features
 
 
     def save(self, features, scaled_features):
         with open(os.path.join(self.working_dir, str.join('', (self.prefix, '_feats.sav'))), 'wb') as filehandle:
             joblib.dump([features, scaled_features], filehandle)
 
-        logging.info('Done extracting features from a total of **{}** training data files. '
-                'Now reducing dimensions...'.format(len(self.processed_input_data)))
+        logging.info(
+            'Done extracting features from a total of **{}** training data files. '
+            'Now reducing dimensions...'.format(len(self.processed_input_data))
+        )
 
-    def learn_embeddings(self):
+    def learn_embeddings(self, **kwargs):
+
         input_feats = self.scaled_features.T
         pca = PCA()
-        pca.fit(self.scaled_features.T)
-        num_dimensions = np.argwhere(np.cumsum(pca.explained_variance_ratio_) >= 0.7)[0][0] + 1
+        pca.fit(input_feats)
+        num_dimensions = (np.argwhere(np.cumsum(pca.explained_variance_ratio_) >= 0.7)[0][0] + 1)
+        # the output of this is np.int64. We want a native Python int
+        # to ensure downstream UMAP implementations work
+        # the CPU one would, but the GPU one complains if num_dimensions is not native int 
+        num_dimensions=num_dimensions.item()
+
         if self.train_size > input_feats.shape[0]:
             self.train_size = input_feats.shape[0]
         np.random.seed(0)
@@ -190,34 +232,23 @@ class extract:
         np.random.seed(0)
         self.sampled_features = features_transposed[np.random.choice(features_transposed.shape[0],
                                                                      self.train_size, replace=False)]
-        logging.info('Randomly sampled **{} minutes**... '.format(self.stride*self.train_size / (60 * self.framerate)))
-        mem = virtual_memory()
-        available_mb = mem.available >> 20
-        logging.info('You have {} MB RAM 🐏 available'.format(available_mb))
-        if available_mb > (sampled_input_feats.shape[0] * sampled_input_feats.shape[1] * 32 * 60) / 1024 ** 2 + 64:
-            logging.info('RAM 🐏 available is sufficient')
-            try:
-                learned_embeddings = umap.UMAP(n_neighbors=60, n_components=num_dimensions,
-                                               **UMAP_PARAMS).fit(sampled_input_feats)
-            except:
-                logging.error('Failed on feature embedding. Try again by unchecking sidebar and rerunning extract features.')
+        logging.info('Randomly sampled **{} minutes**... '.format( self.train_size / 600))
+
+        if self.use_gpu:
+            print(f"Running cuml (GPU) UMAP")
+            self.sampled_embeddings=cuml_umap(data=sampled_input_feats, n_components=num_dimensions, **kwargs)
         else:
-            logging.info(
-                'Detecting that you are running low on available memory for this computation, '
-                'setting low_memory so will take longer.')
-            try:
-                learned_embeddings = umap.UMAP(n_neighbors=60, n_components=num_dimensions, low_memory=True,
-                                               **UMAP_PARAMS).fit(sampled_input_feats)
-            except:
-                logging.error('Failed on feature embedding. Try again by unchecking sidebar and rerunning extract features.')
-        self.sampled_embeddings = learned_embeddings.embedding_
+            print(f"Running umap-learn (CPU) UMAP")
+            self.sampled_embeddings=cpu_umap(data=sampled_input_feats, n_components=num_dimensions, **kwargs)
+
+
         logging.info(
             'Done non-linear embedding of {} instances from **{}** D into **{}** D.'.format(
                 *self.sampled_features.shape, self.sampled_embeddings.shape[1]))
         with open(os.path.join(self.working_dir, str.join('', (self.prefix, '_embeddings.sav'))), 'wb') as f:
             joblib.dump([self.sampled_features, self.sampled_embeddings], f)
 
-    def main(self, n_jobs=1):
+    def main(self, n_jobs=1, **kwargs):
         try:
             [self.sampled_features, self.sampled_embeddings] = load_embeddings_(self.working_dir, self.prefix)
             logging.info('**_CHECK POINT_**: Done non-linear transformation of **{}** instances '
@@ -225,4 +256,4 @@ class extract:
                         'tweak number of clusters__'.format(*self.sampled_features.shape, self.sampled_embeddings.shape[1]))
         except FileNotFoundError:
             self.subsample(fraction=self.fraction)
-            self.compute_features(n_jobs=n_jobs)
+            self.compute_features(n_jobs=n_jobs, **kwargs)
