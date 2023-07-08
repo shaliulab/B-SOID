@@ -82,8 +82,8 @@ class extract:
                     ang_boxcar = []
                     for l in range(disp_r.shape[1]):
                         disp_boxcar.append(boxcar_center(disp_r[:, l], window))
-                    for k in range(dxy_r.shape[1]):
-                        for kk in range(data_n_len):
+                    for k in range(dxy_r.shape[1]): # body parts
+                        for kk in range(data_n_len): # timepoints
                             dxy_eu[kk, k] = np.linalg.norm(dxy_r[kk, k, :])
                             if kk < data_n_len - 1:
                                 b_3d = np.hstack([dxy_r[kk + 1, k, :], 0])
@@ -128,6 +128,7 @@ class extract:
                         scaler.fit(f_integrated.T)
                         scaled_f_integrated = scaler.transform(f_integrated.T).T
                         self.scaled_features = scaled_f_integrated
+                    print(scaled_f_integrated.shape, self.scaled_features.shape)
                 self.features = np.array(self.features)
                 self.scaled_features = np.array(self.scaled_features)
                 with open(os.path.join(self.working_dir, str.join('', (self.prefix, '_feats.sav'))), 'wb') as f:
