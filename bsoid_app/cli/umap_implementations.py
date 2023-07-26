@@ -18,7 +18,8 @@ def cpu_umap(data, **kwargs):
         try:
             print("Fitting data to UMAP")
             with codetiming.Timer():
-                learned_embeddings = umap.UMAP(**umap_params).fit(data)
+                model = umap.UMAP(**umap_params)
+                model.fit(data)
         except:
             logging.error('Failed on feature embedding. Try again by unchecking sidebar and rerunning extract features.')
     else:
@@ -29,7 +30,8 @@ def cpu_umap(data, **kwargs):
         try:
             print("Fitting data to UMAP")
             with codetiming.Timer():
-                learned_embeddings = umap.UMAP(*umap_params).fit(data)
+                model = umap.UMAP(*umap_params)
+                model.fit(data)
         except:
             logging.error('Failed on feature embedding. Try again by unchecking sidebar and rerunning extract features.')
 
@@ -37,7 +39,7 @@ def cpu_umap(data, **kwargs):
     #    same number of rows as input
     #    columns given by num_dimensions
     #    dtype float 32
-    return learned_embeddings.embedding_
+    return model
 
 # # gpumap
 # import gpumap
@@ -53,15 +55,13 @@ def gpu_umap(data, **kwargs):
 # cuml
 from cuml.manifold.umap import UMAP as cuUMAP
 
-def cuml_umap(data, return_embedding=True, **kwargs):
+def cuml_umap(data, **kwargs):
     umap_params=UMAP_PARAMS.copy()
     umap_params.update(kwargs)
     print("Fitting data to UMAP")
     with codetiming.Timer():
-        model = cuUMAP(**umap_params, hash_input=False).fit(data)
-    
-    if return_embedding:
-        return model.embedding_
-    else:
-        return model
+        model = cuUMAP(**umap_params, hash_input=False)
+        model.fit(data)
+
+    return model
     

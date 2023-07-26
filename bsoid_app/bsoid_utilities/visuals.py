@@ -4,7 +4,8 @@ import pandas as pd
 import seaborn as sns
 import streamlit as st
 from matplotlib.axes._axes import _log as matplotlib_axes_logger
-from sklearn.metrics import plot_confusion_matrix
+# from sklearn.metrics import plot_confusion_matrix
+from sklearn.metrics import ConfusionMatrixDisplay
 
 matplotlib_axes_logger.setLevel('ERROR')
 
@@ -76,7 +77,7 @@ def plot_confusion(validate_clf, x_test, y_test):
         'Two confusion matrices - top: counts, bottom: probability with **true positives in diagonal**')
     confusion = []
     for title, normalize in titles_options:
-        cm = plot_confusion_matrix(validate_clf, x_test, y_test, cmap=sns.cm.rocket_r, normalize=normalize)
+        cm = ConfusionMatrixDisplay.from_estimator(validate_clf, x_test, y_test, cmap=sns.cm.rocket_r, normalize=normalize)
         cm.ax_.set_title(title)
         confusion.append(cm.figure_)
     return confusion

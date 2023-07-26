@@ -56,7 +56,7 @@ class preprocess:
             logging.error('Cannot access working directory, was there a typo or did you forget to create one?')
         self.prefix=prefix
 
-    def compile_data(self, frame_numbers=None, n_jobs=1):
+    def compile_data(self, frame_numbers=None, n_jobs=1, **kwargs):
         logging.info('Identify pose to include in clustering.')
         if self.software == 'DeepLabCut' and self.ftype == 'csv':
             raw_input_data, sub_threshold, processed_input_data, input_filenames = preprocess_dlc_csv()
@@ -66,13 +66,14 @@ class preprocess:
         elif self.software == 'SLEAP' and self.ftype == 'h5':
             logging.info("Preprocessing sleap h5 files")
 
-            raw_input_data, sub_threshold, processed_input_data, input_filenames, self.pose_chosen = preprocess_sleap_h5(
+            raw_input_data, sub_threshold, processed_input_data, input_filenames, self.interpolate, self.scores = preprocess_sleap_h5(
                 self.root_path,
                 self.data_directories,
                 n_jobs=n_jobs,
                 no_files=self.no_files,
                 frame_numbers=frame_numbers,
-                pose_chosen=self.pose_chosen
+                pose_chosen=self.pose_chosen,
+                **kwargs,
             )
 
         elif self.software == 'OpenPose' and self.ftype == 'json':
@@ -107,8 +108,7 @@ class preprocess:
         # maybe not needed, but still good to have,
         # to ensure that the chunks are added in the right order
         # i.e. 2 after 1 and so on
-        indexed_data=sorted(indexed_data, key=lambda x: x[0])
-
+        indexed_data=sorted(indexed_data, key=lambda x: os.path.basename(x[0]))
         input_filenames=[e[1] for e in indexed_data]
         raw_input_data=[e[2] for e in indexed_data]
         sub_threshold=[e[3] for e in indexed_data]

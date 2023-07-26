@@ -32,7 +32,7 @@ class cluster:
         if cluster_range is None:
             cluster_range=self.cluster_range
         
-        logging.info('Identifying clusters using {n_jobs} jobs ...')
+        logging.info(f'Identifying clusters using {n_jobs} jobs ...')
         max_num_clusters = -np.infty
         self.min_cluster_size = np.linspace(cluster_range[0], cluster_range[1], 25)
 

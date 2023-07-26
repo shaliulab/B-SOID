@@ -22,18 +22,20 @@ def create_labeled_vid(labels, crit, counts, output_fps, frame_dir, output_path)
     """
     images = [img for img in os.listdir(frame_dir) if img.endswith(".png")]
     sort_nicely(images)
-    # fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     # fourcc = cv2.VideoWriter_fourcc('H', '2', '6', '4')
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    # fourcc = cv2.VideoWriter_fourcc(*'avc1')
     frame = cv2.imread(os.path.join(frame_dir, images[0]))
     height, width, layers = frame.shape
     rnges = []
     n, idx, lengths = repeating_numbers(labels)
     idx2 = []
+
     for i, j in enumerate(lengths):
         if j >= crit:
             rnges.append(range(idx[i], idx[i] + j))
             idx2.append(i)
+    
     for b, i in enumerate(tqdm(np.unique(labels))):
         a = []
         for j in range(0, len(rnges)):
@@ -43,10 +45,13 @@ def create_labeled_vid(labels, crit, counts, output_fps, frame_dir, output_path)
             rand_rnges = random.sample(a, min(len(a), counts))
             for k in range(0, len(rand_rnges)):
                 video_name = 'group_{}_example_{}.mp4'.format(i, k)
+                video_file=os.path.join(output_path, video_name)
+                print(video_file)
+            
                 grp_images = []
                 for l in rand_rnges[k]:
                     grp_images.append(images[l])
-                video = cv2.VideoWriter(os.path.join(output_path, video_name), fourcc, output_fps, (width, height))
+                video = cv2.VideoWriter(video_file, fourcc, output_fps, (width, height))
                 for image in grp_images:
                     video.write(cv2.imread(os.path.join(frame_dir, image)))
                 cv2.destroyAllWindows()
